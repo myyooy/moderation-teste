@@ -1,106 +1,90 @@
 import discord
 from discord.ext import commands
-import json
+from discord.ui import Button, View
 import os
-from datetime import datetime, timedelta
+import asyncio
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Arquivo para salvar warns
-WARN_FILE = "warns.json"
+# --- PAINEL INTERATIVO COM BOTÕES ---
+class PainelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-if not os.path.exists(WARN_FILE):
-    with open(WARN_FILE, "w") as f:
-        json.dump({}, f)
+    @discord.ui.button(label="Limpar Chat", style=discord.ButtonStyle.danger, emoji="🧹")
+    async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message("Use `!clear [quantidade]` para limpar.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Sem permissão!", ephemeral=True)
 
-def load_warns():
-    with open(WARN_FILE, "r") as f:
-        return json.load(f)
-
-def save_warns(warns):
-    with open(WARN_FILE, "w") as f:
-        json.dump(warns, f, indent=4)
+    @discord.ui.button(label="Trancar Canal", style=discord.ButtonStyle.secondary, emoji="🔒")
+    async def lock_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.guild_permissions.manage_channels:
+            await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
+            await interaction.response.send_message("🔒 Canal trancado com sucesso!", ephemeral=True)
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot online como {bot.user}')
-    await bot.change_presence(activity=discord.Game(name="!painel | Servidor de Amigos"))
+    print(f"✅ Sistema de Elite Online: {bot.user}")
 
-# ================== PAINEL ==================
+# Comando do Painel Lindo
 @bot.command()
+@commands.has_permissions(administrator=True)
 async def painel(ctx):
-    embed = discord.Embed(title="🛠 Painel de Moderação", color=0x00ff00)
-    embed.add_field(name="Comandos Principais", value="`!warn` `!warns` `!ban` `!kick` `!mute` `!clear`", inline=False)
-    await ctx.send(embed=embed)
+    embed = discord.Embed(
+        title="🛡️ Central de Comando - Moderation Pro",
+        description="Gerencie seu servidor com eficiência abaixo.",
+        color=0x2f3136
+    )
+    embed.add_field(name="🧹 Moderação", value="`!clear`, `!slowmode`, `!lock`, `!unlock`", inline=False)
+    embed.add_field(name="👤 Usuários", value="`!ban`, `!kick`, `!mute`, `!unmute`", inline=False)
+    embed.set_footer(text="Aperte os botões para ações rápidas")
+    embed.set_image(url="https://i.imgur.com/8fO4lW9.png") # Uma linha estética
+    
+    await ctx.send(embed=embed, view=PainelView())
 
-# ================== SISTEMA DE WARNS ==================
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def warn(ctx, member: discord.Member, *, reason="Sem motivo"):
-    warns = load_warns()
-    user_id = str(member.id)
-    
-    if user_id not in warns:
-        warns[user_id] = {"points": 0, "warns": []}
-    
-    warns[user_id]["points"] += 2
-    warns[user_id]["warns"].append({
-        "reason": reason,
-        "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        "moderator": str(ctx.author)
-    })
-    
-    save_warns(warns)
-    points = warns[user_id]["points"]
-    
-    await ctx.send(f"⚠️ **{member}** recebeu warn! (**{points} pontos** total) | Motivo: {reason}")
-    
-    # Punições automáticas
-    if points >= 12:
-        await member.ban(reason="12+ pontos")
-        await ctx.send(f"🔨 {member} foi banido automaticamente!")
-    elif points >= 8:
-        await member.timeout(timedelta(hours=12))
-        await ctx.send(f"🔇 {member} mutado por 12h (8+ pontos)")
-    elif points >= 4:
-        await member.timeout(timedelta(hours=2))
-        await ctx.send(f"🔇 {member} mutado por 2h (4+ pontos)")
-
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def warns(ctx, member: discord.Member):
-    warns = load_warns()
-    user_id = str(member.id)
-    if user_id not in warns or not warns[user_id]["warns"]:
-        return await ctx.send(f"✅ {member} está limpo.")
-    
-    embed = discord.Embed(title=f"Warns de {member}", color=0xff0000)
-    for w in warns[user_id]["warns"][-10:]:  # últimos 10
-        embed.add_field(name=w['date'], value=f"**Motivo:** {w['reason']}\n**Por:** {w['moderator']}", inline=False)
-    embed.set_footer(text=f"Total de pontos: {warns[user_id]['points']}")
-    await ctx.send(embed=embed)
-
-# ================== ANTI-SPAM ==================
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    await bot.process_commands(message)
-
-# Outros comandos básicos
-@bot.command()
-async def ping(ctx):
-    await ctx.send(f'🏓 Pong! `{round(bot.latency * 1000)}ms`')
-
+# Comando Clear Ultra (Limpa muito)
 @bot.command()
 @commands.has_permissions(manage_messages=True)
-async def clear(ctx, amount: int = 10):
-    await ctx.channel.purge(limit=amount + 1)
-    await ctx.send(f"🧹 {amount} mensagens apagadas!", delete_after=5)
+async def clear(ctx, amount: int = 100):
+    await ctx.message.delete()
+    # Deletando em blocos de 100 (limite do API)
+    deleted = 0
+    while amount > 0:
+        step = min(amount, 100)
+        purged = await ctx.channel.purge(limit=step)
+        deleted += len(purged)
+        amount -= step
+        if len(purged) < step: break # Acabaram as mensagens
+    
+    msg = await ctx.send(f"✅ **{deleted}** mensagens foram incineradas!")
+    await asyncio.sleep(5)
+    await msg.delete()
 
-import os
+# Comando Slowmode
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def slowmode(ctx, seconds: int):
+    await ctx.channel.edit(slowmode_delay=seconds)
+    await ctx.send(f"🐌 Modo lento definido para {seconds} segundos.")
+
+# Comando Lock/Unlock
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def lock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+    await ctx.send("🔒 Canal trancado para membros!")
+
+@bot.command()
+@commands.has_permissions(manage_channels=True)
+async def unlock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
+    await ctx.send("🔓 Canal destrancado!")
+
 bot.run(os.getenv('DISCORD_TOKEN'))
+
